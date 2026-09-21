@@ -1,0 +1,23 @@
+# 运行产物 —— 每次都该重新生成，不提交
+runs/
+reports/*.md
+!reports/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 本地密钥，绝不提交
+.env
+.env.*
+!.env.example
+*.local
+
+# 工具状态
+.workbuddy/
+
+# 编辑器
+.vscode/
+.idea/

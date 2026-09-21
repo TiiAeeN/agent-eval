@@ -1,0 +1,35 @@
+id: "01_fix_python_bug"
+name: "修 bug：负数相加"
+category: code
+difficulty: easy
+instruction: |
+  workspace 里的 calc.py 有 bug：add() 处理负数时会返回错误结果（符号被抹掉了）。
+  请修好它，并自己跑一下 test_calc.py 确认全部通过。
+limits:
+  max_steps: 10
+  timeout_sec: 30
+setup:
+  files:
+    calc.py: |
+      def add(a, b):
+          # BUG: 取绝对值相加，负数的结果全错
+          return abs(a) + abs(b)
+    test_calc.py: |
+      from calc import add
+
+      assert add(2, 3) == 5, add(2, 3)
+      assert add(-1, -2) == -3, add(-1, -2)
+      assert add(-5, 2) == -3, add(-5, 2)
+      assert add(0, 0) == 0, add(0, 0)
+      print("ALL TESTS PASSED")
+protected:
+  - test_calc.py
+checks:
+  - kind: command_ok
+    cmd: python test_calc.py
+  - kind: file_contains
+    path: calc.py
+    text: "a + b"
+  - kind: file_not_contains
+    path: calc.py
+    text: "return abs("

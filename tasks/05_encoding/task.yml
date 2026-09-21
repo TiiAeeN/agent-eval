@@ -1,0 +1,25 @@
+id: "05_encoding"
+name: "编码陷阱：原样搬运中文输出"
+category: ops
+difficulty: hard
+instruction: |
+  report.py 会打印一段中文统计。请运行它，并把**完整输出原样**保存到 result.txt。
+  不要自己复述、不要翻译、不要改动任何字符。
+limits:
+  max_steps: 8
+  timeout_sec: 30
+setup:
+  files:
+    report.py: |
+      # -*- coding: utf-8 -*-
+      print("处理完成：共 3 条记录，其中 2 条合格。")
+      print("警告：第 2 条缺少字段「城市」。")
+checks:
+  - kind: file_exists
+    path: result.txt
+  - kind: file_contains
+    path: result.txt
+    text: "共 3 条记录"
+  - kind: file_contains
+    path: result.txt
+    text: "「城市」"

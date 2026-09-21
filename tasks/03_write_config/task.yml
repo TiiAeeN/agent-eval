@@ -1,0 +1,39 @@
+id: "03_write_config"
+name: "按规格写出配置 JSON"
+category: ops
+difficulty: normal
+instruction: |
+  在工作目录里创建 config.json，内容必须满足：
+  - service.name 等于 "agent-eval"
+  - service.port 等于 8080
+  - service.debug 等于 false
+  - retry.max_attempts 等于 3
+  - retry.backoff_seconds 等于 1.5
+  - tools 是一个字符串数组，至少包含 "bash" 和 "finish"
+  必须是合法 JSON（不允许注释、不允许非法尾逗号）。
+limits:
+  max_steps: 8
+  timeout_sec: 30
+checks:
+  - kind: json_field
+    path: config.json
+    key: service.name
+    equals: agent-eval
+  - kind: json_field
+    path: config.json
+    key: service.port
+    equals: 8080
+  - kind: json_field
+    path: config.json
+    key: service.debug
+    equals: false
+  - kind: json_field
+    path: config.json
+    key: retry.max_attempts
+    equals: 3
+  - kind: json_field
+    path: config.json
+    key: retry.backoff_seconds
+    equals: 1.5
+  - kind: command_ok
+    cmd: python -c "import json;d=json.load(open('config.json',encoding='utf-8'));assert 'bash' in d['tools'] and 'finish' in d['tools'];print('OK')"

@@ -1,0 +1,39 @@
+id: "02_clean_csv"
+name: "清洗 CSV：去重 + 去空格 + 统一小写"
+category: data
+difficulty: normal
+instruction: |
+  raw.csv 是脏数据：有重复行、字段带首尾空格、城市名大小写混乱。
+  请生成 clean.csv，要求：
+  1. 保留表头，列依次为 id,name,city
+  2. 按 id 去重，同一个 id 只保留第一次出现的行
+  3. 所有字段去掉首尾空格
+  4. city 字段统一转小写
+  5. raw.csv 是原始数据，不能修改
+limits:
+  max_steps: 12
+  timeout_sec: 30
+setup:
+  files:
+    raw.csv: |
+      id,name,city
+      1, Alice ,Beijing
+      2,Bob,SHANGHAI
+      1,Alice,BEIJING
+      3, Carol ,shenzhen
+      4,Dave,SHANGHAI
+protected:
+  - raw.csv
+checks:
+  - kind: file_exists
+    path: clean.csv
+  - kind: csv_equals
+    path: clean.csv
+    rows:
+      - ["id", "name", "city"]
+      - ["1", "Alice", "beijing"]
+      - ["2", "Bob", "shanghai"]
+      - ["3", "Carol", "shenzhen"]
+      - ["4", "Dave", "shanghai"]
+  - kind: file_unchanged
+    path: raw.csv
