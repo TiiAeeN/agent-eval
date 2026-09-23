@@ -25,6 +25,7 @@ from typing import Any, Callable
 from .agents import Agent, ToolBox, Trajectory
 from .checks import CheckResult, protected_violations, run_checks
 from .dialogue import DialogueAgent, run_dialogue_once
+from .memory import MemoryStore
 from .sandbox import Sandbox
 from .spec import Task
 from .users import ScriptedUser
@@ -47,6 +48,7 @@ class RunResult:
     # 对话型才有意义
     turns: int = 0
     dialogue: Any = None
+    memory_state: dict[str, Any] = field(default_factory=dict)
 
     @property
     def failed_checks(self) -> list[CheckResult]:
@@ -134,13 +136,17 @@ def run_dialogue_task_once(task: Task, agent: DialogueAgent, sb: Sandbox,
     baseline = {p: sb.file_hash(p) for p in task.protected}
     hash_before = sb.state_hash()
 
+    # 长期记忆：每次运行新建一块（但**块内跨会话**保留）
+    memory = MemoryStore(dspec.memory)
+
     t0 = time.perf_counter()
     dres = run_dialogue_once(
         task, agent,
-        ScriptedUser(list(dspec.user_script), closing=dspec.closing or None),  # ← 每次全新用户
-        backend,
-        sb,
+        backend=backend, sb=sb,
         max_turns=dspec.max_turns,
+        memory=memory,
+        sessions=dspec.sessions or [dspec.user_script],   # 没配多段就单段
+        closing=dspec.closing or None,
     )
     wall = time.perf_counter() - t0
 
@@ -157,6 +163,7 @@ def run_dialogue_task_once(task: Task, agent: DialogueAgent, sb: Sandbox,
         state_hash_before=hash_before, state_hash_after=hash_after,
         trajectory=dres.trajectory, error=dres.error,
         turns=dres.turns, dialogue=dres,
+        memory_state=dres.memory_state,
     )
 
 

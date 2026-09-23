@@ -47,6 +47,7 @@ FILE_KINDS = {
 DIALOGUE_KINDS = {
     "conclusion", "backend_state", "transcript_said",
     "tool_called", "tool_not_called", "turns_max",
+    "memory_state", "transcript_not_said",
 }
 
 KNOWN_KINDS = FILE_KINDS | DIALOGUE_KINDS
@@ -114,6 +115,14 @@ def _run_dialogue(c: dict[str, Any], runtime: Any) -> CheckResult:
                 return _ok(kind, f"/{pattern}/", "agent 说过")
             return _fail(kind, f"/{pattern}/", f"agent 全程没说过匹配 /{pattern}/ 的话")
 
+        if kind == "transcript_not_said":
+            pattern = str(c.get("pattern", ""))
+            if transcript is None:
+                return _fail(kind, pattern, "没有对话记录")
+            if transcript.agent_said(pattern):
+                return _fail(kind, f"/{pattern}/", "说了不该说的话")
+            return _ok(kind, f"/{pattern}/", "确实没说过")
+
         if kind in ("tool_called", "tool_not_called"):
             tool = str(c.get("tool", ""))
             n = transcript.called(tool) if transcript is not None else 0
@@ -125,6 +134,37 @@ def _run_dialogue(c: dict[str, Any], runtime: Any) -> CheckResult:
             if n == 0:
                 return _ok(kind, tool, "确实没调")
             return _fail(kind, tool, f"不该调，却调了 {n} 次")
+
+        if kind == "memory_state":
+            mem = getattr(runtime, "memory_state", None) or {}
+            data: dict = mem.get("data") or {}
+            blob = "\n".join(f"{k}={v}" for k, v in data.items())
+            bad: list[str] = []
+
+            # 按**值**判，不按 key 判 —— agent 给 key 起什么名字是它的自由，
+            # 逼它猜中我们想的那个键名，考的是猜谜不是记忆。
+            if "value_matches" in c:
+                pat = str(c["value_matches"])
+                if not re.search(pat, blob):
+                    bad.append(f"记忆里找不到 /{pat}/（它没记住该记的东西）")
+            for pat in (c.get("absent_matches") or []):
+                if re.search(str(pat), blob):
+                    bad.append(f"记忆里出现了不该有的 /{pat}/")
+            for k, v in (c.get("expect") or {}).items():
+                if data.get(str(k)) != str(v):
+                    bad.append(f"{k} 记的是 {data.get(str(k))!r}、应为 {v!r}")
+            for k in (c.get("absent") or []):
+                if str(k) in data:
+                    bad.append(f"不该记 {k!r}，却记了")
+
+            if "min_writes" in c and mem.get("writes", 0) < int(c["min_writes"]):
+                bad.append(f"只写过 {mem.get('writes', 0)} 次记忆")
+            if "min_reads" in c and mem.get("reads", 0) < int(c["min_reads"]):
+                bad.append(f"只读过 {mem.get('reads', 0)} 次记忆")
+
+            if bad:
+                return _fail(kind, "长期记忆", "；".join(bad))
+            return _ok(kind, "长期记忆", f"{len(data)} 条：{blob[:120]}")
 
         if kind == "turns_max":
             n = int(c.get("n", 0))

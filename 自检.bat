@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] 对话型判分器自检...
+echo [3/4] 对话型判分器自检...
 "%PY%" selftest_dialogue.py
 if errorlevel 1 (
   echo.
@@ -33,5 +33,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo [通过] 两套自检全绿。想看报告： reports\
+echo [4/4] 长期记忆判分器自检...
+"%PY%" selftest_memory.py
+if errorlevel 1 (
+  echo.
+  echo [失败] 记忆判分器自检没过
+  pause
+  exit /b 1
+)
+
+echo.
+echo [通过] 三套自检全绿。想看报告： reports\
 pause

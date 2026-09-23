@@ -25,7 +25,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .agents import MAX_OBSERVATION, TOOL_SPECS, Step, ToolBox, Trajectory
+from .memory import MemoryStore
 from .sandbox import Sandbox
+from .users import ScriptedUser
 
 
 # --------------------------------------------------------------------------
@@ -37,6 +39,7 @@ class Turn:
     idx: int
     speaker: str          # "user" | "agent"
     text: str
+    session: int = 1      # 第几次会话（长期记忆测试会跑多段）
 
 
 @dataclass
@@ -45,9 +48,13 @@ class Transcript:
 
     turns: list[Turn] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
+    session: int = 1
 
     def add(self, speaker: str, text: str) -> None:
-        self.turns.append(Turn(len(self.turns) + 1, speaker, text))
+        self.turns.append(Turn(len(self.turns) + 1, speaker, text, self.session))
+
+    def start_session(self, n: int) -> None:
+        self.session = n
 
     def user_lines(self) -> list[str]:
         return [t.text for t in self.turns if t.speaker == "user"]
@@ -70,8 +77,13 @@ class Transcript:
         return sum(1 for s in self.steps if s.tool == tool)
 
     def render(self) -> str:
-        out = []
+        out: list[str] = []
+        last = None
         for t in self.turns:
+            if t.session != last:
+                if last is not None:
+                    out.append(f"  ────── 第 {t.session} 次会话 ──────")
+                last = t.session
             who = "用户" if t.speaker == "user" else "agent"
             out.append(f"  {t.idx:>2}. [{who}] {t.text}")
         return "\n".join(out)
@@ -127,10 +139,12 @@ class DialogueToolBox(ToolBox):
     """
 
     def __init__(self, sb: Sandbox, backend: DialogueBackend,
-                 transcript: Transcript, timeout: int = 30):
+                 transcript: Transcript, memory: MemoryStore | None = None,
+                 timeout: int = 30):
         super().__init__(sb, timeout)
         self.backend = backend
         self.transcript = transcript
+        self.memory = memory
         self.said: list[str] = []
         self.finished = False
 
@@ -138,6 +152,8 @@ class DialogueToolBox(ToolBox):
         out = dict(TOOL_SPECS)
         out.update(DIALOGUE_TOOL_SPECS)
         out.update(self.backend.tool_specs())
+        if self.memory is not None:
+            out.update(self.memory.tool_specs())
         return out
 
     def dispatch(self, tool: str, args: dict[str, Any]) -> str:
@@ -159,6 +175,8 @@ class DialogueToolBox(ToolBox):
         if tool == "finish":
             self.finished = True
             return "[ok] 结束"
+        if self.memory is not None and tool in self.memory.tool_specs():
+            return self.memory.call(tool, args)
         if tool in self.backend.tool_specs():
             return self.backend.call(tool, args)
         return super().dispatch(tool, args)
@@ -258,6 +276,8 @@ class DialogueResult:
     finished: bool
     wall_time: float
     error: str = ""
+    memory_state: dict[str, Any] = field(default_factory=dict)
+    sessions: list[dict[str, Any]] = field(default_factory=list)
 
 
 # 用户不说话了、而 agent 还没交卷时，由考场再推它一把：
@@ -266,47 +286,67 @@ WRAPUP_LINE = "（对方不再说话了。请把你的处理结论交上来。�
 WRAPUP_ROUNDS = 2
 
 
-def run_dialogue_once(task, agent: DialogueAgent, user, backend: DialogueBackend,
-                      sb: Sandbox, max_turns: int | None = None) -> DialogueResult:
-    """跑一场对话。
+def _session_loop(user, agent: DialogueAgent, toolbox: DialogueToolBox,
+                  transcript: Transcript, max_turns: int) -> tuple[int, bool]:
+    """跑一段会话。返回 (用掉几轮, 这一段落有没有主动收尾)。"""
+    turn, wrapups = 0, 0
+    user_msg = user.next_message(transcript.user_lines())
+    while turn < max_turns:
+        if user_msg is None:
+            # 对方不说话了。但对话不能就这么断 ——
+            # agent 可能还欠着一个结论，考场得给它机会交上来。
+            if toolbox.finished or wrapups >= WRAPUP_ROUNDS:
+                break
+            wrapups += 1
+            user_msg = WRAPUP_LINE
+        turn += 1
+        transcript.add("user", user_msg)
+        agent.respond(user_msg, transcript, toolbox)
+        if toolbox.finished:
+            break
+        user_msg = user.next_message(transcript.user_lines())
+    return turn, toolbox.finished
 
-    流程：用户先说 → agent 回应（可能连调几个工具）→ 用户再说 → …
-    终止条件：用户没话了（next_message 返回 None）/ agent 调了 finish / 轮数用完。
+
+def run_dialogue_once(task, agent: DialogueAgent, user=None, backend: DialogueBackend = None,
+                      sb: Sandbox = None, max_turns: int | None = None,
+                      memory: MemoryStore | None = None,
+                      sessions: list[list[str]] | None = None,
+                      closing: str | None = None) -> DialogueResult:
+    """跑一场对话。可以是一段，也可以是**多段会话**。
+
+    多段会话（长期记忆测试用）：同一块记忆、同一个后端，用户隔几天来一次。
+    每段之间只换剧本 —— 记忆、工单、后端状态全都留着，那才叫「长期」。
     """
     transcript = Transcript()
-    toolbox = DialogueToolBox(sb, backend, transcript, timeout=task.limits.timeout_sec)
+    toolbox = DialogueToolBox(sb, backend, transcript, memory=memory,
+                              timeout=task.limits.timeout_sec)
     toolbox.task = task          # agent 从这里拿任务说明（作业规范写在 instruction 里）
     max_turns = max_turns or task.limits.max_steps
     error = ""
-    turn = 0
+    session_log: list[dict[str, Any]] = []
     t0 = time.perf_counter()
 
-    try:
-        user_msg = user.next_message(transcript.user_lines())
-        wrapups = 0
-        while turn < max_turns:
-            if user_msg is None:
-                # 对方不说话了。但对话不能就这么断 ——
-                # agent 可能还欠着一个结论，考场得给它机会交上来。
-                if toolbox.finished or wrapups >= WRAPUP_ROUNDS:
-                    break
-                wrapups += 1
-                user_msg = WRAPUP_LINE
-            turn += 1
-            transcript.add("user", user_msg)
-            agent.respond(user_msg, transcript, toolbox)
-            if toolbox.finished:
-                break
-            user_msg = user.next_message(transcript.user_lines())
-    except Exception as e:  # noqa: BLE001 —— agent 崩了记成一次失败运行，不中断整轮
-        error = f"{type(e).__name__}: {e}"
+    for no, script in enumerate(sessions if sessions else [None], 1):
+        transcript.start_session(no)
+        toolbox.finished = False        # 上一通电话结束了，这一通是新的
+        sim = user if script is None else ScriptedUser(list(script),
+                                                      closing=closing or None)
+        try:
+            used, done = _session_loop(sim, agent, toolbox, transcript, max_turns)
+        except Exception as e:  # noqa: BLE001 —— agent 崩了记成一次失败运行，不中断整轮
+            error = f"{type(e).__name__}: {e}"
+            break
+        session_log.append({"session": no, "turns": used, "finished": done})
 
     return DialogueResult(
         task_id=task.id,
         transcript=transcript,
         trajectory=Trajectory(steps=list(transcript.steps), finished=toolbox.finished),
         backend_state=backend.snapshot(),
-        turns=turn,
+        memory_state=memory.snapshot() if memory is not None else {},
+        turns=sum(s["turns"] for s in session_log),
+        sessions=session_log,
         finished=toolbox.finished,
         wall_time=time.perf_counter() - t0,
         error=error,

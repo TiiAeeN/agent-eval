@@ -104,6 +104,8 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--task", action="append", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--tasks", default=None,
+                    help="题目目录（默认本目录 test1/）；要跑 test2 就写 --tasks test2")
     args = ap.parse_args()
 
     if args.env_file:
@@ -111,7 +113,10 @@ def main() -> int:
         n = load_env_file(p if p.is_absolute() else HERE / p)
         print(f"[env] 从 {args.env_file} 读入 {n} 个变量（值不打印）")
 
-    tasks = discover_tasks(TASKS, kind="dialogue")
+    tdir = pathlib.Path(args.tasks) if args.tasks else TASKS
+    if not tdir.is_absolute():
+        tdir = ROOT / tdir
+    tasks = discover_tasks(tdir, kind="dialogue")
     if args.task:
         wanted = set(args.task)
         tasks = [t for t in tasks if t.id in wanted]

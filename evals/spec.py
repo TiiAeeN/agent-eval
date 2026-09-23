@@ -38,6 +38,9 @@ class DialogueSpec:
     order_id: str = ""
     max_turns: int | None = None
     closing: str = ""
+    # 长期记忆测试：一次运行跑多段会话，共享同一块记忆和同一个后端
+    sessions: list[list[str]] = field(default_factory=list)
+    memory: dict[str, str] = field(default_factory=dict)
     expect: dict[str, str] = field(default_factory=dict)
     expect_backend: dict[str, Any] = field(default_factory=dict)
 
@@ -82,6 +85,8 @@ def _parse_dialogue(raw: Any, fallback_max_steps: int) -> DialogueSpec | None:
         max_turns=int(mt) if mt is not None else fallback_max_steps,
         # 剧本说完了，用户还得能接得住话 —— 否则 agent 问一句没人应，就卡死
         closing=str(raw.get("closing", "好的，那就麻烦你帮我办一下吧。")),
+        sessions=[[str(s) for s in seg] for seg in (raw.get("sessions") or [])],
+        memory={str(k): str(v) for k, v in (raw.get("memory") or {}).items()},
         expect={str(k): str(v) for k, v in (raw.get("expect") or {}).items()},
         expect_backend=dict(raw.get("expect_backend") or {}),
     )
