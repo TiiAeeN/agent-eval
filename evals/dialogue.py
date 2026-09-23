@@ -230,11 +230,14 @@ def build_dialogue_prompt(task, toolbox: DialogueToolBox) -> str:
 
 规则：
 - 一次只做一件事，看完返回结果再决定下一步。
-- 用户说了话，你必须**先回应**，不要闷头办自己的事。
+- **先把该办的事办完**（该查的查、该核对的核对、该退的退、该转人工的转人工），
+  最后才对用户说话。说一句 say 就等于把话交回给用户了 —— 别先寒暄再办事，
+  否则这一轮就白费了。
 - 不要臆测：要查订单就 lookup_order，不要凭想象判断。
-- 拿不准的事，宁可问用户，也不要替他做主。
-- 处理完了，先 say 告诉用户结果，再 finish。
-- 最多 {task.limits.max_steps} 轮。
+- 不要重复劳动：已经查过、核对过的事情，不要再做一遍。
+- 拿不准的事，宁可转人工，也不要替用户做主。
+- **事情有结论时（同意退 / 拒绝 / 转人工），必须调 conclude 交卷**，再调 finish 结束。
+- conclude 的三格必须从它规定的取值里选，不许自己造词。
 
 任务：
 {task.render_instruction()}
@@ -257,6 +260,12 @@ class DialogueResult:
     error: str = ""
 
 
+# 用户不说话了、而 agent 还没交卷时，由考场再推它一把：
+# 「对方不说了，把你的结论交上来」。最多推这么多轮。
+WRAPUP_LINE = "（对方不再说话了。请把你的处理结论交上来。）"
+WRAPUP_ROUNDS = 2
+
+
 def run_dialogue_once(task, agent: DialogueAgent, user, backend: DialogueBackend,
                       sb: Sandbox, max_turns: int | None = None) -> DialogueResult:
     """跑一场对话。
@@ -266,6 +275,7 @@ def run_dialogue_once(task, agent: DialogueAgent, user, backend: DialogueBackend
     """
     transcript = Transcript()
     toolbox = DialogueToolBox(sb, backend, transcript, timeout=task.limits.timeout_sec)
+    toolbox.task = task          # agent 从这里拿任务说明（作业规范写在 instruction 里）
     max_turns = max_turns or task.limits.max_steps
     error = ""
     turn = 0
@@ -273,7 +283,15 @@ def run_dialogue_once(task, agent: DialogueAgent, user, backend: DialogueBackend
 
     try:
         user_msg = user.next_message(transcript.user_lines())
-        while user_msg is not None and turn < max_turns:
+        wrapups = 0
+        while turn < max_turns:
+            if user_msg is None:
+                # 对方不说话了。但对话不能就这么断 ——
+                # agent 可能还欠着一个结论，考场得给它机会交上来。
+                if toolbox.finished or wrapups >= WRAPUP_ROUNDS:
+                    break
+                wrapups += 1
+                user_msg = WRAPUP_LINE
             turn += 1
             transcript.add("user", user_msg)
             agent.respond(user_msg, transcript, toolbox)
@@ -293,3 +311,90 @@ def run_dialogue_once(task, agent: DialogueAgent, user, backend: DialogueBackend
         wall_time=time.perf_counter() - t0,
         error=error,
     )
+
+
+# --------------------------------------------------------------------------
+# 真模型考生
+# --------------------------------------------------------------------------
+
+class LLMDialogueAgent(DialogueAgent):
+    """真模型当考生。走 OpenAI 兼容接口（DeepSeek / OpenAI / 本地 vLLM 都行）。
+
+    一轮里可以连调几个工具；**调了 say 就算这一轮说完**，把话交回给用户。
+
+    它是无状态的（全靠外部传进来的 transcript），但还是按工厂来建 ——
+    接口统一，也不给"复用对象"留口子。
+
+    ⚠ 模型调用失败必须**大声崩**，让这轮记成失败。绝不能静默变成"通过"。
+    """
+
+    def __init__(self, model: str = "deepseek-chat",
+                 base_url: str = "https://api.deepseek.com/v1",
+                 api_key_env: str = "DEEPSEEK_API_KEY",
+                 temperature: float = 0.0, timeout: int = 120,
+                 max_calls_per_turn: int = 4):
+        from .agents import LLMAgent          # 复用它的 HTTP 客户端，不另写一份
+        self._llm = LLMAgent(model=model, base_url=base_url, api_key_env=api_key_env,
+                             temperature=temperature, timeout=timeout)
+        self.name = f"llm-dialogue:{model}"
+        self.max_calls_per_turn = max_calls_per_turn
+        self._messages: list[dict[str, str]] | None = None   # 跨轮延续，别每轮重建
+
+    def respond(self, user_msg: str, transcript: Transcript,
+                toolbox: DialogueToolBox) -> None:
+        """⚠ messages 必须**留在自己身上**，跨轮延续。
+
+        早先的写法是每轮从 transcript 重建 messages ——
+        可 transcript 里只有"它说过的话"，**没有它调过的工具**。
+        结果：模型每轮都失忆重来，把 lookup_order / verify_identity
+        反复做五遍，永远推进不到下一步。
+        （踩过的坑：现象是"它死活不交卷"，根因是记忆被我弄丢了。）
+        """
+        task = getattr(toolbox, "task", None)
+        if task is None:
+            raise RuntimeError("LLMDialogueAgent 拿不到 task —— 运行器得先把 task 放进 toolbox")
+
+        if self._messages is None:
+            self._messages = [{"role": "system",
+                               "content": build_dialogue_prompt(task, toolbox)}]
+        self._messages.append({"role": "user", "content": user_msg})
+
+        concluded = False
+        for _ in range(self.max_calls_per_turn):
+            try:
+                raw = self._llm._chat(self._messages)
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(f"模型调用失败: {type(e).__name__}: {e}") from e
+
+            action = self._llm._parse(raw)
+            if action is None:
+                self._messages.append({"role": "assistant", "content": raw})
+                self._messages.append({"role": "user",
+                                       "content": "格式错误：必须只输出一个 JSON 对象"
+                                                  "（thought/tool/args）。重来。"})
+                continue
+
+            tool = str(action.get("tool", ""))
+            obs = toolbox.dispatch(tool, action.get("args") or {})
+            self._messages.append({"role": "assistant", "content": raw})
+
+            if tool == "conclude":
+                concluded = True
+
+            if tool == "finish":
+                return
+
+            # 「说一句话」通常等于把话交回给用户，这一轮就该结束了。
+            # **但交过卷之后不一样**：那已经是收尾阶段，它还要把结论告诉用户、
+            # 再调 finish 收工。这时候在 say 处截断，等于把已经早停的 agent
+            # 硬拉回来又问一遍 —— 量出来的"没早停"是假的。
+            if tool == "say" and not concluded:
+                return
+
+            self._messages.append({"role": "user",
+                                   "content": f"观察结果:\n{obs[:MAX_OBSERVATION]}"})
+
+        # 一轮里工具次数用完还没跟用户说话。
+        # 这里**故意什么都不补** —— 宁可让记录里留着"这一轮它没回话"，
+        # 也不要替它编一句，那会污染判分。
+        return

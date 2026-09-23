@@ -164,9 +164,10 @@ class RefundBackend(DialogueBackend):
                 "args": {"reason_code": f"原因代码，可选: {sorted(REASONS)}"},
             },
             "collect_evidence": {
-                "desc": ("采集用户提供的凭证编号（照片/视频的编号）。"
+                "desc": ("登记用户提供的凭证（照片/视频/聊天里发来的图）。"
                          "你无法判断凭证是真是假，也不用判断 —— 只管收下来，真伪留给人工。"),
-                "args": {"order_id": "订单号", "code": "凭证编号，例如 EV-1234"},
+                "args": {"order_id": "订单号",
+                         "code": "凭证是什么：编号，或者一句话描述，比如「用户发来的照片，鞋盒上写着 40 码」"},
             },
             "issue_refund": {
                 "desc": "执行退款。会按业务规则审核；不合规会被拒绝并说明理由。",
@@ -259,8 +260,8 @@ class RefundBackend(DialogueBackend):
     def _collect_evidence(self, order_id: str, code: str) -> str:
         """只采集，不判真伪 —— agent 没有判断凭证真假的能力，硬判没有意义。"""
         self.evidence.append({"order_id": order_id, "code": code})
-        return (f"[已采集] 凭证编号 {code!r} 已记录在案，会随工单一起交给人工核实。\n"
-                f"  （你不需要判断它的真伪。）")
+        return (f"[已采集] 凭证 {code!r} 已登记在案，会随工单一起交给人工核实。\n"
+                f"  （你不需要判断它的真伪，凭证也不是办退款的前提。）")
 
     def _refund(self, order_id: str, code: str) -> str:
         o = self._order(order_id)

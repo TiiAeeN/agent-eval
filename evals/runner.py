@@ -137,7 +137,7 @@ def run_dialogue_task_once(task: Task, agent: DialogueAgent, sb: Sandbox,
     t0 = time.perf_counter()
     dres = run_dialogue_once(
         task, agent,
-        ScriptedUser(list(dspec.user_script)),   # ← 每次全新用户
+        ScriptedUser(list(dspec.user_script), closing=dspec.closing or None),  # ← 每次全新用户
         backend,
         sb,
         max_turns=dspec.max_turns,

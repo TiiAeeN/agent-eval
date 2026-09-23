@@ -37,6 +37,7 @@ class DialogueSpec:
     user_script: list[str] = field(default_factory=list)
     order_id: str = ""
     max_turns: int | None = None
+    closing: str = ""
     expect: dict[str, str] = field(default_factory=dict)
     expect_backend: dict[str, Any] = field(default_factory=dict)
 
@@ -79,6 +80,8 @@ def _parse_dialogue(raw: Any, fallback_max_steps: int) -> DialogueSpec | None:
         user_script=[str(s) for s in (raw.get("user_script") or [])],
         order_id=str(raw.get("order_id", "")),
         max_turns=int(mt) if mt is not None else fallback_max_steps,
+        # 剧本说完了，用户还得能接得住话 —— 否则 agent 问一句没人应，就卡死
+        closing=str(raw.get("closing", "好的，那就麻烦你帮我办一下吧。")),
         expect={str(k): str(v) for k, v in (raw.get("expect") or {}).items()},
         expect_backend=dict(raw.get("expect_backend") or {}),
     )

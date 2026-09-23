@@ -41,16 +41,26 @@ class ScriptedUser(UserSimulator):
         user.next_message(["...", "..."])                -> None      ← 剧本说完了
     """
 
-    def __init__(self, script: list[str]):
+    def __init__(self, script: list[str], closing: str | None = None,
+                 max_closing: int = 2):
         self.script = list(script)
         self.index = 0
+        # 「收尾台词」：剧本说完之后，还能再说的那几句。
+        # 为什么需要它：客服问的问题可能超出剧本（"麻烦把凭证发我"）。
+        # 剧本一断，对话就断了 —— agent 再没机会把事情办完、交卷。
+        # 但收尾台词不能说没完，说够 max_closing 次就得真的结束。
+        self.closing = closing
+        self.max_closing = max_closing
 
     def next_message(self, history: list[str]) -> str | None:
-          if self.index >= len(self.script):
-              return None
-          msg = self.script[self.index]
-          self.index += 1
-          return msg
+        if self.index < len(self.script):
+            msg = self.script[self.index]
+            self.index += 1
+            return msg
+        if self.closing and self.index < len(self.script) + self.max_closing:
+            self.index += 1
+            return self.closing
+        return None
 if __name__ == "__main__":
     print("ScriptedUser 自检\n")
     ok = True
