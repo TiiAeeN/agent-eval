@@ -43,31 +43,14 @@ class ScriptedUser(UserSimulator):
 
     def __init__(self, script: list[str]):
         self.script = list(script)
-        # TODO(你) ①
-        # 这里还缺一个东西：记住"已经说到第几句了"。
-        # 想个名字，给它一个初值，加一行。
-        # 提示：一个整数；第一句之前，你还没说过任何话。
-        #       注意别写成 self.script[0] —— 我们要记的是"位置"，不是"内容"。
+        self.index = 0
 
     def next_message(self, history: list[str]) -> str | None:
-        # TODO(你) ②  下面三步，把这行 raise 删掉换成你的实现
-        #
-        #   1. 先守住边界：如果已经说到剧本末尾了，直接 return None
-        #      （这种"先判断、提前返回"的写法叫 guard clause，
-        #        比 if/else 套来套去清爽得多，是 Python 里的好习惯）
-        #
-        #   2. 把当前这一句取出来，存到一个变量里
-        #
-        #   3. 游标往前挪一格，然后 return 那句话
-        #
-        #   顺序很关键：如果先挪游标再取句子，你会取错一格。
-        #   自己想一想为什么，想通了再写。
-        raise NotImplementedError("轮到你了 —— 删掉这一行，写上你的实现")
-
-
-# ---------------------------------------------------------------------------
-# 自检：写完直接跑，看有没有 ✗
-# ---------------------------------------------------------------------------
+          if self.index >= len(self.script):
+              return None
+          msg = self.script[self.index]
+          self.index += 1
+          return msg
 if __name__ == "__main__":
     print("ScriptedUser 自检\n")
     ok = True

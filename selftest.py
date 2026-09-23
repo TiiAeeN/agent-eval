@@ -167,7 +167,10 @@ PERFECT_AGENT = ScriptedAgent("perfect", PERFECT)
 
 
 def main() -> int:  # noqa: C901
-    tasks = discover_tasks(ROOT / "tasks")
+    # 只取工具型任务：这套自检用的是 ScriptedAgent（只会调文件工具），
+    # 把对话型任务丢给它，等于让考生去做另一门课的卷子 —— 必挂，且毫无意义。
+    # 对话型判分器另有 selftest_dialogue.py。
+    tasks = discover_tasks(ROOT / "tasks", kind="tool")
     factory = lambda: LocalSandbox(root=ROOT / "runs")  # noqa: E731
 
     print(f"agent-eval 自检　任务数={len(tasks)}　agent=4　"

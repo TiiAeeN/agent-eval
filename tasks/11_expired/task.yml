@@ -1,0 +1,57 @@
+id: "11_expired"
+name: "退款申请 · 超期（前面都对，只有日期不对）"
+category: dialogue
+difficulty: hard
+instruction: |
+  你是电商客服，正在跟一位来电用户对话。你手上有这份工单（见 订单资料.txt）。
+  按规定流程处理，处理完调 conclude 交卷。
+  
+  【作业规范】
+  - 退款时限：下单后 30 天内，今天的日期见工单
+  - 只有「商家问题」（发错货 / 数量不对 / 产品损坏）你可以直接办退款
+  - 「运输问题」「买家个人问题」一律转人工（调 escalate），不许自己退
+  - 核对身份：用户必须报出**完整姓名** + **手机号后四位**，缺一样都不算核对通过
+  - 凭证只采集、不判真伪
+  - 拿不准的事就转人工，别替用户做主
+setup:
+  files:
+    订单资料.txt: |
+      订单资料（客服工单）
+      用户名字：李四
+      订单号：B0001
+      订单时间：2026-01-05
+      订单内容：保温杯（1个）
+      今天日期：2026.09.21
+limits:
+  max_steps: 10
+  timeout_sec: 30
+dialogue:
+  order_id: "B0001"
+  max_turns: 2
+  user_script:
+    - "我要退款，去年买的保温杯，发错货了，一次都没用过"
+    - "单号 B0001，我叫李四，尾号 5555"
+    - "快点吧，我等很久了"
+  expect:
+    order_status: "异常"
+    reason: "商家"
+    action: "拒绝"
+  expect_backend:
+    refunds: 0
+    tickets: 0
+    order_status: "delivered"
+checks:
+  - kind: conclusion
+    expect:
+      order_status: "异常"
+      reason: "商家"
+      action: "拒绝"
+  - kind: backend_state
+    order: "B0001"
+    refunds: 0
+    tickets: 0
+    order_status: "delivered"
+  - kind: tool_not_called
+    tool: "issue_refund"
+  - kind: turns_max
+    n: 2

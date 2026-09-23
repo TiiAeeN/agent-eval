@@ -84,7 +84,9 @@ def main() -> int:
     if args.env_file:
         load_env_file(Path(args.env_file))
 
-    tasks = discover_tasks(ROOT / "tasks")
+    # 只取工具型任务 —— 这个入口跑的是文件型 agent。
+    # 对话型任务的运行入口要另配（用户模拟器 + 假后端 + LLM 对话 agent），下一步接。
+    tasks = discover_tasks(ROOT / "tasks", kind="tool")
     if args.task:
         wanted = set(args.task)
         tasks = [t for t in tasks if t.id in wanted]

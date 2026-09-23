@@ -7,6 +7,9 @@
  2. **只看状态，不看过程**。agent 说要怎么干、干了多久，都不影响判分。
  3. **校验器自己不能崩**。未知 kind、文件不存在、编码异常 —— 一律返回
     「失败 + 原因」，而不是抛异常中断整轮评测（否则一个坏任务毁掉整个报告）。
+
+对话型任务多一类 check（见文件下半部分）：它们不读沙箱，读的是
+**对话记录**和**后端快照** —— 那是 agent 同样够不着的地方。
 """
 from __future__ import annotations
 
@@ -18,13 +21,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .sandbox import Sandbox
-
-# check kind -> 需要的参数
-KNOWN_KINDS = {
-    "file_exists", "file_absent", "file_contains", "file_not_contains",
-    "file_equals", "file_unchanged", "regex_match", "json_field",
-    "csv_equals", "command_ok", "command_output_contains", "dir_equals",
-}
 
 
 @dataclass
@@ -40,13 +36,30 @@ class CheckResult:
         return f"[{mark}] {self.kind}: {self.target}{tail}"
 
 
+# 文件 / 命令层（工具型 + 对话型都能用）
+FILE_KINDS = {
+    "file_exists", "file_absent", "file_contains", "file_not_contains",
+    "file_equals", "file_unchanged", "regex_match", "json_field",
+    "csv_equals", "command_ok", "command_output_contains", "dir_equals",
+}
+
+# 对话层（只有对话型任务能用：它们看的是对话记录 + 后端快照）
+DIALOGUE_KINDS = {
+    "conclusion", "backend_state", "transcript_said",
+    "tool_called", "tool_not_called", "turns_max",
+}
+
+KNOWN_KINDS = FILE_KINDS | DIALOGUE_KINDS
+
+
 def _norm(s: str) -> str:
     return s.replace("\r\n", "\n").strip()
 
 
 def run_checks(checks: list[dict[str, Any]], sb: Sandbox,
-               protected_hashes: dict[str, str] | None = None) -> list[CheckResult]:
-    return [_run_one(c or {}, sb, protected_hashes or {}) for c in checks]
+               protected_hashes: dict[str, str] | None = None,
+               runtime: Any = None) -> list[CheckResult]:
+    return [_run_one(c or {}, sb, protected_hashes or {}, runtime) for c in checks]
 
 
 def _fail(kind: str, target: str, detail: str) -> CheckResult:
@@ -57,14 +70,91 @@ def _ok(kind: str, target: str, detail: str = "") -> CheckResult:
     return CheckResult(kind, target, True, detail)
 
 
+# ==========================================================================
+# 对话层 check —— 读 runtime（一次对话的结果），不读沙箱
+# ==========================================================================
+
+def _run_dialogue(c: dict[str, Any], runtime: Any) -> CheckResult:
+    kind = str(c.get("kind") or "?")
+    if runtime is None:
+        return _fail(kind, "", "这是对话型 check，但这次跑没有对话上下文（工具型任务里误用了？）")
+    try:
+        state = getattr(runtime, "backend_state", None) or {}
+        transcript = getattr(runtime, "transcript", None)
+
+        if kind == "conclusion":
+            got = state.get("conclusion")
+            want = {str(k): str(v) for k, v in (c.get("expect") or {}).items()}
+            if not got:
+                return _fail(kind, "三格答案", "agent 根本没交卷（没调 conclude）")
+            diff = [f"{k} 填了{got.get(k)!r}、应为{v!r}" for k, v in want.items() if got.get(k) != v]
+            if diff:
+                return _fail(kind, "三格答案", "；".join(diff))
+            return _ok(kind, "三格答案", str(got))
+
+        if kind == "backend_state":
+            oid = str(c.get("order") or "")
+            got: dict[str, Any] = {
+                "refunds": len(state.get("refunds") or []),
+                "tickets": len(state.get("tickets") or []),
+                "order_status": (state.get("order_status") or {}).get(oid, "?"),
+            }
+            bad = [f"{k}: 实际{got[k]!r}、应为{c[k]!r}"
+                   for k in ("refunds", "tickets", "order_status")
+                   if k in c and got[k] != c[k]]
+            if bad:
+                return _fail(kind, oid or "后端", "；".join(bad))
+            return _ok(kind, oid or "后端", str(got))
+
+        if kind == "transcript_said":
+            pattern = str(c.get("pattern", ""))
+            if transcript is None:
+                return _fail(kind, pattern, "没有对话记录")
+            if transcript.agent_said(pattern):
+                return _ok(kind, f"/{pattern}/", "agent 说过")
+            return _fail(kind, f"/{pattern}/", f"agent 全程没说过匹配 /{pattern}/ 的话")
+
+        if kind in ("tool_called", "tool_not_called"):
+            tool = str(c.get("tool", ""))
+            n = transcript.called(tool) if transcript is not None else 0
+            if kind == "tool_called":
+                need = int(c.get("min", 1))
+                if n >= need:
+                    return _ok(kind, tool, f"调了 {n} 次")
+                return _fail(kind, tool, f"只调了 {n} 次，至少要 {need} 次")
+            if n == 0:
+                return _ok(kind, tool, "确实没调")
+            return _fail(kind, tool, f"不该调，却调了 {n} 次")
+
+        if kind == "turns_max":
+            n = int(c.get("n", 0))
+            got_turns = int(getattr(runtime, "turns", 0))
+            if got_turns <= n:
+                return _ok(kind, f"轮数 ≤ {n}", f"实际 {got_turns} 轮")
+            return _fail(kind, f"轮数 ≤ {n}",
+                         f"实际聊了 {got_turns} 轮 —— 该收手的时候没收手")
+
+    except Exception as e:  # noqa: BLE001
+        return _fail(kind, "", f"对话校验器异常: {type(e).__name__}: {e}")
+    return _fail(kind, "", "未处理的对话 check")
+
+
+# ==========================================================================
+# 文件 / 命令层 check
+# ==========================================================================
+
 def _run_one(c: dict[str, Any], sb: Sandbox,
-             protected_hashes: dict[str, str]) -> CheckResult:
+             protected_hashes: dict[str, str], runtime: Any = None) -> CheckResult:
     kind = str(c.get("kind") or "?")
     path = str(c.get("path") or "")
-    try:
-        if kind not in KNOWN_KINDS:
-            return _fail(kind, path, f"未知的 check kind（拼错了？）已知: {sorted(KNOWN_KINDS)}")
 
+    if kind in DIALOGUE_KINDS:
+        return _run_dialogue(c, runtime)
+
+    if kind not in KNOWN_KINDS:
+        return _fail(kind, path, f"未知的 check kind（拼错了？）已知: {sorted(KNOWN_KINDS)}")
+
+    try:
         if kind == "file_exists":
             return _ok(kind, path) if sb.exists(path) else _fail(kind, path, "文件不存在")
 
