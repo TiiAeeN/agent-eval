@@ -28,8 +28,11 @@ import pathlib
 import sys
 from datetime import datetime
 
-ROOT = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent      # test1/
+ROOT = HERE.parent                                  # 项目根
 sys.path.insert(0, str(ROOT))
+TASKS = HERE                                        # 六道题就在本目录
+REPORTS = ROOT / "reports"
 
 from evals.dialogue import (DialogueToolBox, LLMDialogueAgent, Transcript,  # noqa: E402
                             WRAPUP_LINE)
@@ -135,13 +138,13 @@ def main() -> int:
     ap.add_argument("--model", default="deepseek-chat")
     ap.add_argument("--base-url", default="https://api.deepseek.com/v1")
     ap.add_argument("--api-key-env", default="DEEPSEEK_API_KEY")
-    ap.add_argument("--env-file", default="../qq-clone/.env")
+    ap.add_argument("--env-file", default="../../qq-clone/.env")
     ap.add_argument("--from-task", default="06_ask_first",
                     help="作业规范从哪道题抄（默认照 06 的规范）")
     args = ap.parse_args()
 
     try:
-        n = load_env_file(ROOT / args.env_file)
+        n = load_env_file(HERE / args.env_file)
         print(f"[env] 读入 {n} 个变量（值不打印）\n")
     except FileNotFoundError as e:
         print(f"[env] {e} —— 自己设好环境变量再跑")
@@ -160,7 +163,7 @@ def main() -> int:
     except EOFError:
         pass
 
-    preset = [t for t in discover_tasks(ROOT / "tasks", kind="dialogue")
+    preset = [t for t in discover_tasks(TASKS, kind="dialogue")
               if t.id == args.from_task]
     if not preset:
         print(f"[错] 找不到题目 {args.from_task}")
@@ -289,7 +292,7 @@ def main() -> int:
     print(f"  判定：{verdict}" + (f"　备注：{note}" if note else ""))
     print(RULE)
 
-    out = ROOT / "reports" / f"manual-{datetime.now():%Y%m%d-%H%M%S}.md"
+    out = REPORTS / f"manual-{datetime.now():%Y%m%d-%H%M%S}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     parts = [
         f"# 自定义测试　{datetime.now():%Y-%m-%d %H:%M:%S}\n",

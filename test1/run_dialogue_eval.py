@@ -14,8 +14,10 @@ import pathlib
 import sys
 from datetime import datetime
 
-ROOT = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent      # test1/
+ROOT = HERE.parent                                  # 项目根
 sys.path.insert(0, str(ROOT))
+TASKS = HERE
 
 from evals.dialogue import LLMDialogueAgent  # noqa: E402
 from evals.runner import run_dialogue_suite  # noqa: E402
@@ -98,18 +100,18 @@ def main() -> int:
     ap.add_argument("--base-url", default="https://api.deepseek.com/v1")
     ap.add_argument("--api-key-env", default="DEEPSEEK_API_KEY")
     ap.add_argument("--temperature", type=float, default=0.0)
-    ap.add_argument("--env-file", default=None)
+    ap.add_argument("--env-file", default="../../qq-clone/.env")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--task", action="append", default=None)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     if args.env_file:
-        n = load_env_file(ROOT / args.env_file if not os.path.isabs(args.env_file)
-                          else pathlib.Path(args.env_file))
+        p = pathlib.Path(args.env_file)
+        n = load_env_file(p if p.is_absolute() else HERE / p)
         print(f"[env] 从 {args.env_file} 读入 {n} 个变量（值不打印）")
 
-    tasks = discover_tasks(ROOT / "tasks", kind="dialogue")
+    tasks = discover_tasks(TASKS, kind="dialogue")
     if args.task:
         wanted = set(args.task)
         tasks = [t for t in tasks if t.id in wanted]

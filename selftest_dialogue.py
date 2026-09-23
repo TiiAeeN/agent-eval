@@ -112,7 +112,7 @@ def bad_all_talk(task_id: str, order_id: str) -> list[list[dict]]:
 # --------------------------------------------------------------------------
 
 def main() -> int:
-    tasks = [t for t in discover_tasks(ROOT / "tasks") if t.is_dialogue]
+    tasks = [t for t in discover_tasks(ROOT / "test1") if t.is_dialogue]
     if not tasks:
         print("没找到对话型任务")
         return 1
